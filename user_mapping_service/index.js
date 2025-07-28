@@ -4,6 +4,7 @@ const sqlite3 = require('sqlite3').verbose();
 const swaggerJsdoc = require('swagger-jsdoc');
 const swaggerUi = require('swagger-ui-express');
 const ExcelJS = require('exceljs');
+const axios = require('axios');
 
 const app = express();
 app.use(bodyParser.json());
@@ -21,7 +22,51 @@ const initQueries = [
 `CREATE TABLE IF NOT EXISTS mapping_user_fields_options (id INTEGER PRIMARY KEY AUTOINCREMENT, src_value_key TEXT, trg_value_key TEXT, src_field TEXT, trg_field TEXT)`
 ];
 
-initQueries.forEach(q => db.run(q));
+db.serialize(() => {
+  initQueries.forEach(q => db.run(q));
+  fetchAll().catch(e => console.error('Failed to fetch user fields', e));
+});
+
+async function fetchAndStore(instance, fieldTable, optionTable) {
+  const url = instance.url.replace(/\/$/, '') + '/api/v2/user_fields.json';
+  const auth = Buffer.from(`${instance.email}/token:${instance.token}`).toString('base64');
+  const resp = await axios.get(url, {
+    headers: { Authorization: `Basic ${auth}` }
+  });
+  const fields = resp.data && resp.data.user_fields ? resp.data.user_fields : [];
+  for (const f of fields) {
+    const fieldVals = [f.title, f.key, f.type, f.system ? 'system' : 'custom'];
+    await new Promise((resolve, reject) => {
+      db.run(
+        `INSERT OR IGNORE INTO ${fieldTable}(name, field_key, data_type, field_type) VALUES (?,?,?,?)`,
+        fieldVals,
+        err => (err ? reject(err) : resolve())
+      );
+    });
+    const options = f.custom_field_options || f.system_field_options || [];
+    for (const opt of options) {
+      const vals = [opt.name, opt.value, f.key];
+      await new Promise((resolve, reject) => {
+        db.run(
+          `INSERT OR IGNORE INTO ${optionTable}(option_values, option_key, parent_key) VALUES (?,?,?)`,
+          vals,
+          err => (err ? reject(err) : resolve())
+        );
+      });
+    }
+  }
+}
+
+async function fetchAll() {
+  const src = { url: process.env.SRC_URL, email: process.env.SRC_EMAIL, token: process.env.SRC_TOKEN };
+  const trg = { url: process.env.TRG_URL, email: process.env.TRG_EMAIL, token: process.env.TRG_TOKEN };
+  if (src.url && src.email && src.token) {
+    await fetchAndStore(src, 'src_user_fields', 'src_user_options');
+  }
+  if (trg.url && trg.email && trg.token) {
+    await fetchAndStore(trg, 'trg_user_fields', 'trg_user_options');
+  }
+}
 
 function checkParent(table, parentKey, value, cb) {
   const userTable = table.startsWith('src') ? 'src_user_fields' : 'trg_user_fields';
