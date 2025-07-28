@@ -1,0 +1,9 @@
+{
+  "name": "node-sqlite-app",
+  "version": "1.0.0",
+  "main": "index.js",
+  "license": "MIT",
+  "dependencies": {
+    "sqlite3": "^5.1.6"
+  }
+}
